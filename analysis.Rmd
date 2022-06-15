@@ -22,7 +22,6 @@ library(tidyr)
 
 library(ggplot2) # plotting
 library(wesanderson)
-library(hrbrthemes)
 
 ```
 
@@ -90,7 +89,7 @@ colnames(df) <- c("id", "pdbdate", "Resolution", "Method", "NA")
 ```
 
 ```{r}
-#Substitute timestamp with year and replace unfrequent methods with 'Other'
+#Substitute timestamp with year and replace infrequent methods with 'Other'
 df <- df %>%
   mutate(Year = as.numeric(format(as.Date(pdbdate, format = "%Y-%m-%dT%H:%M:%SZ"), "%Y")), 
          Method = ifelse(Method %in% c("X-RAY DIFFRACTION",
@@ -99,7 +98,7 @@ df <- df %>%
 ```
 
 ```{r}
-#Aggregate and remove current year
+#Aggregate and remove the current year
 df_aggr <- df %>% 
   group_by(Year, Method) %>% 
   summarise(Structures = n(), .groups = 'drop') %>% 
@@ -114,7 +113,8 @@ p <- ggplot(df_aggr, aes(x=Year, y=Structures, fill=Method)) +
   scale_fill_manual(values = wes_palette("Royal1")) + 
   ggtitle("Number of structures published per year. ",
           subtitle = "Linear grows sinse 90's!") +
-  theme_minimal()
+  theme_minimal() +
+  theme(axis.title.y = element_text(hjust = 1), axis.title.x = element_text( hjust = 1))
 print(p)
 ```
 
@@ -136,29 +136,33 @@ p <- ggplot(df_micr, aes(x=Year, y = Angstrem, color=Resolution)) +
   geom_point() +
   scale_color_manual(values = wes_palette("BottleRocket2")) +
   theme_minimal() +
+  theme(axis.title.y = element_text(hjust = 1), axis.title.x = element_text( hjust = 1)) +
   scale_y_continuous(trans='log10') +
   ggtitle("The median and the best resolution",
-          subtitle = "Something happened in the mid 2010's.")
+          subtitle = "Something happened in the mid 2010s.")
 print(p)
 
 ```
 ```{r}
-#Calculate relative number of EM structures related to X-ray structures
+#Calculate relative number of EM structures related to X-ray structures since 2011
 df_comp <- df_aggr %>%
   filter(Method %in% c("X-RAY DIFFRACTION",
                       "ELECTRON MICROSCOPY")) %>% 
   pivot_wider(names_from = "Method", values_from = Structures) %>% 
-  filter(Year > 2011) %>% 
+  filter(Year > 2004) %>% 
   mutate(k=log10(`ELECTRON MICROSCOPY`/`X-RAY DIFFRACTION`))
 ```
 
 ```{r fig.height=6, message=FALSE, warning=FALSE}
+#Plot the linear regression
 p <- ggplot(df_comp, aes(x=Year, y=k)) +
-  geom_point() +
-  xlim(c(2012, 2026)) +
+  geom_point(data=subset(df_comp, Year >= 2012)) +
+  geom_point(data=subset(df_comp, Year  < 2012), alpha = .2) +
+  xlim(c(2005, 2026)) +
   geom_hline(yintercept = 0,color = "red", linetype = "solid") +
   theme_minimal() +
-  stat_smooth(method = "lm", col = "red", fullrange=TRUE) +
+  theme(axis.title.y = element_text(hjust = 1), axis.title.x = element_text( hjust = 1)) +
+  stat_smooth(method = "lm", col = "red", data=subset(df_comp, Year >= 2012), fullrange = TRUE) +
   ggtitle("EM might outstrip X-Ray in 2024",
           subtitle = "k represents a 10 base log of the ELECTRON MICROSCOPY/X-RAY DIFFRACTION ratio ")
 print(p)
