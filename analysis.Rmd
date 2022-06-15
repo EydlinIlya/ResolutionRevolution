@@ -1,0 +1,171 @@
+---
+title: "Structural biology"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+
+```{r message=FALSE, warning=FALSE}
+#import libs
+
+library(httr) #working with API
+library(jsonlite)
+
+library(purrr) #vetorisation
+
+library(dplyr) #tidy workflow
+library(tibble)
+library(tidyr)
+
+library(ggplot2) # plotting
+library(wesanderson)
+library(hrbrthemes)
+
+```
+
+
+```{r}
+#Request search API to find ids of all entries
+endpoint_search <- 'https://search.rcsb.org/rcsbsearch/v2/query' 
+args <- list(json = '{
+  "request_options": {
+    "return_all_hits": true
+  },
+  "return_type": "entry"
+}')
+
+res <- GET(endpoint_search, query = args)
+```
+
+
+```{r}
+#Extract ids from response and group them by 1000 items (for pagination)
+ids <- res$content %>% 
+  rawToChar() %>% 
+  fromJSON() %>% 
+  .$result_set %>% 
+  .$identifier  %>%
+  split(ceiling(seq_along(.)/1000)) %>% 
+  purrr::map(., \(x) toJSON(x))
+```
+
+```{r}
+#Function to send request to graph api. Takes a vector of ids as an argument
+send_req <- function(ids, endpoint_graph = 'https://data.rcsb.org/graphql') {
+  args <- list(query = paste0('{
+  entries(entry_ids: ', ids, ') {
+    rcsb_id,
+    rcsb_accession_info {
+      initial_release_date
+        },
+    em_3d_reconstruction {
+      resolution
+        },
+    exptl {
+      method
+    }
+  }
+}'))
+
+data <- GET(endpoint_graph, query = args)
+return(data)
+  }
+```
+
+```{r}
+#Send requests for every array of ids and merge. Will take a couple of minutes to complete
+df_list <- purrr::map(ids, \(x) send_req(x) %>% 
+                  .$content %>% 
+                  rawToChar() %>% 
+                  fromJSON() %>% 
+                  as_tibble() %>% 
+                  unnest(data) %>% 
+                  unnest(c("rcsb_accession_info", "em_3d_reconstruction", "exptl")))
+df <- map_dfr(df_list, bind_rows)
+colnames(df) <- c("id", "pdbdate", "Resolution", "Method", "NA")
+
+```
+
+```{r}
+#Substitute timestamp with year and replace unfrequent methods with 'Other'
+df <- df %>%
+  mutate(Year = as.numeric(format(as.Date(pdbdate, format = "%Y-%m-%dT%H:%M:%SZ"), "%Y")), 
+         Method = ifelse(Method %in% c("X-RAY DIFFRACTION",
+                                       "ELECTRON MICROSCOPY",
+                                       "SOLUTION NMR"), Method, "OTHER")) 
+```
+
+```{r}
+#Aggregate and remove current year
+df_aggr <- df %>% 
+  group_by(Year, Method) %>% 
+  summarise(Structures = n(), .groups = 'drop') %>% 
+  filter(Year != max(Year))
+```
+
+
+```{r fig.height=6}
+#Plot bar chart
+p <- ggplot(df_aggr, aes(x=Year, y=Structures, fill=Method)) +
+  geom_bar(stat='identity') +
+  scale_fill_manual(values = wes_palette("Royal1")) + 
+  ggtitle("Number of structures published per year. ",
+          subtitle = "Linear grows sinse 90's!") +
+  theme_minimal()
+print(p)
+```
+
+```{r message=FALSE, warning=FALSE}
+#Calculate the best and the median resolution of EM structures by year
+df_micr <- df %>% 
+  filter(Method == "ELECTRON MICROSCOPY") %>% 
+  group_by(Year, Method) %>% 
+  summarise(Median = median(Resolution, na.rm=TRUE), 
+            Best = min(Resolution, na.rm=TRUE),  .groups = 'drop') %>% 
+  na.omit() %>% 
+  pivot_longer(c(Median, Best), names_to = "Resolution", values_to = "Angstrem")
+```
+
+```{r message=FALSE, warning=FALSE}
+#Plot the line chart
+p <- ggplot(df_micr, aes(x=Year, y = Angstrem, color=Resolution)) +
+  geom_line() +
+  geom_point() +
+  scale_color_manual(values = wes_palette("BottleRocket2")) +
+  theme_minimal() +
+  scale_y_continuous(trans='log10') +
+  ggtitle("The median and the best resolution",
+          subtitle = "Something happened in the mid 2010's.")
+print(p)
+
+```
+```{r}
+#Calculate relative number of EM structures related to X-ray structures
+df_comp <- df_aggr %>%
+  filter(Method %in% c("X-RAY DIFFRACTION",
+                      "ELECTRON MICROSCOPY")) %>% 
+  pivot_wider(names_from = "Method", values_from = Structures) %>% 
+  filter(Year > 2011) %>% 
+  mutate(k=log10(`ELECTRON MICROSCOPY`/`X-RAY DIFFRACTION`))
+```
+
+```{r fig.height=6, message=FALSE, warning=FALSE}
+p <- ggplot(df_comp, aes(x=Year, y=k)) +
+  geom_point() +
+  xlim(c(2012, 2026)) +
+  geom_hline(yintercept = 0,color = "red", linetype = "solid") +
+  theme_minimal() +
+  stat_smooth(method = "lm", col = "red", fullrange=TRUE) +
+  ggtitle("EM might outstrip X-Ray in 2024",
+          subtitle = "k represents a 10 base log of the ELECTRON MICROSCOPY/X-RAY DIFFRACTION ratio ")
+print(p)
+  
+```
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
